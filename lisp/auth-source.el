@@ -2405,44 +2405,83 @@ MODE can be \"login\" or \"password\"."
       (setq password (funcall password)))
     (list user password auth-info)))
 
-;;; Tiny mode for editing .netrc/.authinfo modes (that basically just
-;;; hides passwords).
+;;; Tiny minor mode for editing .netrc/.authinfo modes (that basically
+;;; just hides passwords).
 
-(defcustom authinfo-hidden "password"
-  "Regexp matching elements in .authinfo/.netrc files that should be hidden."
+(defcustom auth-source-reveal-regex "password"
+  "Regexp matching tokens or JSON keys in .authinfo/.netrc/JSON files.
+The text following the tokens or under the JSON keys will be hidden."
   :type 'regexp
   :version "27.1")
 
-;;;###autoload
-(define-derived-mode authinfo-mode fundamental-mode "Authinfo"
-  "Mode for editing .authinfo/.netrc files.
+(defcustom auth-source-reveal-json-modes '(json-mode js-mode js2-mode rjsx-mode)
+  "List of symbols for modes that should use JSON parsing logic."
+  :type 'list
+  :version "27.1")
 
-This is just like `fundamental-mode', but hides passwords.  The
-passwords are revealed when point moved into the password.
-
-\\{authinfo-mode-map}"
-  (authinfo--hide-passwords (point-min) (point-max))
-  (reveal-mode))
-
-(defun authinfo--hide-passwords (start end)
+(defun auth-source-reveal--propertize (start end hide)
   (save-excursion
-    (save-restriction
-      (narrow-to-region start end)
-      (goto-char start)
-      (while (re-search-forward (format "\\(\\s-\\|^\\)\\(%s\\)\\s-+"
-                                        authinfo-hidden)
-                                nil t)
-        (when (auth-source-netrc-looking-at-token)
-          (let ((overlay (make-overlay (match-beginning 0) (match-end 0))))
-            (overlay-put overlay 'display (propertize "****"
-                                                      'face 'warning))
-            (overlay-put overlay 'reveal-toggle-invisible
-                         #'authinfo--toggle-display)))))))
+    (goto-char start)
+    (if (member major-mode auth-source-reveal-json-modes)
+        ;; JSON modes
+        (debug)
+      ;; non-JSON modes
+      (save-restriction
+        (narrow-to-region (max (point-at-bol) start)
+                          (max (point-at-eol) end))
+        (cl-dolist (o (overlays-in (point-min) (point-max)))
+          (when (overlay-get o 'display)
+            (delete-overlay o)))
+        (while (re-search-forward (format "\\(\\s-\\|^\\)\\(%s\\)\\s-+"
+                                          auth-source-reveal-regex)
+                                  nil t)
+          (when (auth-source-netrc-looking-at-token)
+            (let ((overlay (make-overlay (match-beginning 0) (match-end 0))))
+              (auth-source-reveal--display overlay hide)
+              (overlay-put overlay 'reveal-toggle-invisible
+                           #'auth-source-reveal--display))))))))
 
-(defun authinfo--toggle-display (overlay hide)
+(defun auth-source-reveal--display (overlay hide)
   (if hide
-      (overlay-put overlay 'display (propertize "****" 'face 'warning))
+      (overlay-put overlay 'display
+                   ;; Make a string of * of the same size as the original
+                   (propertize (make-string 6 ?*) 'face 'warning))
     (overlay-put overlay 'display nil)))
+
+(defun auth-source-reveal-after-change-function (start stop n)
+  (auth-source-reveal--propertize start stop auth-source-reveal-mode))
+
+;; (progn
+;;   (setq auth-source-reveal-json-modes '(emacs-lisp-mode lisp-interaction-mode))
+;;   (auth-source-reveal-mode t))
+
+;; (auth-source-reveal-mode -1)
+
+;;;###autoload
+(define-minor-mode auth-source-reveal-mode
+  "Toggle password hiding for auth-source files using `reveal-mode'.
+
+If called interactively, enable auth-source-reveal mode if ARG is
+positive, and disable it if ARG is zero or negative.  If called
+from Lisp, also enable the mode if ARG is omitted or nil, and
+toggle it if ARG is toggle; disable the mode otherwise.
+
+When auth-source-reveal mode is enabled, password will be hidden
+using an overlay.  See `auth-source-password-hide-regex' for the
+regex matching the tokens and keys associated with passwords."
+  ;; The initial value.
+  :init-value nil
+  ;; The indicator for the mode line.
+  :lighter " asr"
+  :group 'auth-source
+
+  (auth-source-do-trivia "Setting auth-source-reveal-mode to %S"
+                         auth-source-reveal-mode)
+  (if auth-source-reveal-mode
+      (add-hook 'after-change-functions #'auth-source-reveal-after-change-function nil t)
+    (remove-hook 'after-change-functions #'auth-source-reveal-after-change-function t))
+  (auth-source-reveal--propertize (point-min) (point-max) auth-source-reveal-mode)
+  (reveal-mode (if auth-source-reveal-mode 1 -1)))
 
 (provide 'auth-source)
 
