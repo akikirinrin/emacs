@@ -2427,7 +2427,7 @@ The text following the tokens or under the JSON keys will be hidden."
         (debug)
       ;; non-JSON modes
       (save-restriction
-        (narrow-to-region (max (point-at-bol) start)
+        (narrow-to-region (min (point-at-bol) start)
                           (max (point-at-eol) end))
         (cl-dolist (o (overlays-in (point-min) (point-max)))
           (when (overlay-get o 'display)
